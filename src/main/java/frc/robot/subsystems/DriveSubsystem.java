@@ -12,6 +12,7 @@ import edu.wpi.first.wpilibj.drive.DifferentialDrive;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.Constants;
+import frc.robot.sim.JSimIntegration;
 
 public class DriveSubsystem extends SubsystemBase {
   
@@ -23,6 +24,11 @@ public class DriveSubsystem extends SubsystemBase {
   /** Creates a new DriveSubsystem. */
   public DriveSubsystem() {
     differentialDrive = new DifferentialDrive(rightFrontMotor, leftFrontMotor);
+    // Register motors with JSim (no-op if JSim isn't present)
+    JSimIntegration.registerSparkMax("leftFrontMotor", leftFrontMotor);
+    JSimIntegration.registerSparkMax("rightFrontMotor", rightFrontMotor);
+    JSimIntegration.registerSparkMax("leftBackMotor", leftBackMotor);
+    JSimIntegration.registerSparkMax("rightBackMotor", rightBackMotor);
   }
   
   public Command driveCommand(DoubleSupplier speed, DoubleSupplier rotation){

@@ -8,12 +8,14 @@ import com.revrobotics.spark.SparkMax;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.Constants;
+import frc.robot.sim.JSimIntegration;
 
 public class Shooter extends SubsystemBase {
    private final SparkMax shooterMotor = new SparkMax(Constants.IdConstants.SHOOTER_MOTOR_ID,MotorType.kBrushed);
   /** Creates a new CoralSubsystem. */
   public Shooter() {
-
+    // Register with JSim (safe no-op if JSim isn't present)
+    JSimIntegration.registerSparkMax("shooterMotor", shooterMotor);
   }
 
          public Command shooterCornerForwardCommand(){
