@@ -1,106 +1,102 @@
 package frc.robot.sim;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 import edu.wpi.first.wpilibj.RobotBase;
 import com.revrobotics.spark.SparkMax;
 
+// JSim concrete imports (available when vendordeps are downloaded)
+import jsim.PhysicsWorld;
+import jsim.PhysicsBody;
+import jsim.jni.JSimJNI;
+import jsim.Vec3;
+
 /**
- * Lightweight, reflection-based integration point for JSim.
+ * Concrete integration with JSim when vendordeps are present.
  *
- * This class purposefully avoids a compile-time dependency on JSim by using
- * Class.forName / reflection. If JSim is present on the classpath at runtime
- * (provided by vendordeps), it will try to call common initialization points
- * and register SparkMax devices. If JSim is not present, all calls are no-ops.
+ * This class initialises the JSim native library and creates a PhysicsWorld for
+ * the simulation. It provides a very small mapping API to create physics bodies
+ * for motors and steps the physics world during simulationPeriodic.
+ *
+ * Current behavior:
+ * - Calls JSimJNI.forceLoad() and initialize()
+ * - Creates a single PhysicsWorld instance and steps it each simulation tick
+ * - registerSparkMax creates a trivial physics body stub for the motor (so it
+ *   shows up in the physics world) but it does not yet model motor torque —
+ *   that can be expanded later.
  */
 public final class JSimIntegration {
-  private static boolean jSimAvailable = false;
+  private static volatile boolean jSimAvailable = false;
+  private static PhysicsWorld world = null;
+  private static final Map<String, jsim.PhysicsBody> motorBodyMap = new ConcurrentHashMap<>();
+
   private JSimIntegration() {}
 
-  /** Attempt to initialize JSim. Safe to call multiple times. */
   public static void init() {
     if (!RobotBase.isSimulation()) {
       return;
     }
-
     if (jSimAvailable) {
       return;
     }
 
     try {
-      // Try a few likely entry points; vendors may differ in naming.
-      Class<?> cls;
-      try {
-        cls = Class.forName("jsim.JSim");
-      } catch (ClassNotFoundException e) {
-        cls = Class.forName("jsim.api.JSim");
-      }
+      // Try to force-load JNI library and initialize
+      JSimJNI.forceLoad();
+      int rc = JSimJNI.initialize();
+      // initialize() may return a status code; we ignore for now but log
+      System.out.println("[JSimIntegration] JSimJNI.initialize() returned " + rc);
 
-      try {
-        // Common static init method name used by many libs
-        cls.getMethod("init").invoke(null);
-      } catch (NoSuchMethodException e) {
-        try {
-          cls.getMethod("initialize").invoke(null);
-        } catch (NoSuchMethodException ex) {
-          // If no init methods exist, that's fine — JSim may not need explicit init.
-        }
-      }
+      // Create a PhysicsWorld with 20ms step and enable some default behavior
+      world = new PhysicsWorld(0.02, true);
+      // default gravity (m/s^2) — downward on Z
+      world.setGravity(new Vec3(0.0, 0.0, -9.81));
 
       jSimAvailable = true;
-      System.out.println("[JSimIntegration] JSim detected and (attempted) initialization.");
-    } catch (ClassNotFoundException e) {
-      // JSim not present on classpath — nothing to do.
-      System.out.println("[JSimIntegration] JSim not found on classpath; continuing without JSim integration.");
-    } catch (Exception e) {
-      System.out.println("[JSimIntegration] Unexpected error while initializing JSim: " + e);
-      // don't rethrow — fail gracefully
+      System.out.println("[JSimIntegration] JSim initialized and PhysicsWorld created.");
+    } catch (UnsatisfiedLinkError e) {
+      System.out.println("[JSimIntegration] Native JSim library not available: " + e.getMessage());
+    } catch (NoClassDefFoundError e) {
+      System.out.println("[JSimIntegration] JSim Java classes not available on classpath: " + e.getMessage());
+    } catch (Throwable t) {
+      System.out.println("[JSimIntegration] Error initializing JSim: " + t);
     }
   }
 
   /**
-   * Register a SparkMax with JSim if possible. This method will silently return
-   * if JSim isn't available or the expected registration API isn't found.
+   * Create a small physics body to represent a SparkMax-driven mechanism. This
+   * currently creates a body and stores its id; it does not yet map motor output
+   * to physics forces — that's a follow-up enhancement.
    */
   public static void registerSparkMax(String name, SparkMax spark) {
-    if (!RobotBase.isSimulation()) {
+    if (!RobotBase.isSimulation() || !jSimAvailable || world == null) {
       return;
     }
 
-    // Ensure we attempted init first
-    if (!jSimAvailable) {
-      init();
-      if (!jSimAvailable) {
-        return;
-      }
-    }
-
     try {
-      // Many simulation libs expose a registration API; attempt to call a reasonable name.
-      // We use reflection so compilation does not require JSim on the classpath.
-      Class<?> apiClass = Class.forName("jsim.api.JSimAPI");
-      try {
-        java.lang.reflect.Method m = apiClass.getMethod("registerSparkMax", String.class, SparkMax.class);
-        m.invoke(null, name, spark);
-        System.out.println("[JSimIntegration] Registered SparkMax with JSim: " + name);
-        return;
-      } catch (NoSuchMethodException ignored) {}
-
-      try {
-        java.lang.reflect.Method m2 = apiClass.getMethod("registerMotorController", String.class, Object.class);
-        m2.invoke(null, name, spark);
-        System.out.println("[JSimIntegration] Registered motor controller with JSim: " + name);
-        return;
-      } catch (NoSuchMethodException ignored) {}
-
-      // If the apiClass exists but no known register method, fallthrough silently.
-    } catch (ClassNotFoundException e) {
-      // JSim API class not found — nothing to do.
-    } catch (Exception e) {
-      System.out.println("[JSimIntegration] Error while registering SparkMax: " + e);
+  jsim.PhysicsBody body = world.createBody(1.0); // mass placeholder
+  motorBodyMap.put(name, body);
+  // place body at origin
+  body.setPosition(0.0, 0.0, 0.0);
+  body.setGravityEnabled(true);
+  System.out.println("[JSimIntegration] Created physics body for " + name + " id=" + body.bodyIndex());
+    } catch (Throwable t) {
+      System.out.println("[JSimIntegration] Error creating physics body for " + name + ": " + t);
     }
   }
 
-  /** Periodic update hook; kept for future expansion. */
   public static void periodic() {
-    // No-op for now. If JSim needs tick calls, add them here via reflection.
+    if (!RobotBase.isSimulation() || !jSimAvailable || world == null) {
+      return;
+    }
+    try {
+      // Step the physics world once per call. If the simulator calls this at
+      // a different rate, consider accumulating and stepping with an integer
+      // number of steps.
+      world.step();
+    } catch (Throwable t) {
+      System.out.println("[JSimIntegration] Error stepping physics world: " + t);
+    }
   }
 }
